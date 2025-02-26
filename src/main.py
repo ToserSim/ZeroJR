@@ -8,13 +8,21 @@ from discord.ext import commands, tasks
 from dpyConsole import Console
 from rich import inspect
 from enum import Enum, auto, StrEnum
+from utils import PickleFilePath
 import time
 
 import record
 import builder
+from discord2record import GuildConverter
 
 import aiohttp
-import requests
+import aiofiles
+
+import gen_record
+
+# import uvloop
+# uvloop.install()
+
 
 class ClearKind(StrEnum):
     ALL = auto()
@@ -36,28 +44,30 @@ my_console = Console(bot)
 
 #Эта шиза снизу для распознавания консолью всякой шизы вроде ClearKind
 def path_convert(param):
-    return Path(param)
-my_console.converter.add_converter(Path, path_convert) # What the fuck?
+    return PickleFilePath.__value__(param)
+my_console.converter.add_converter(PickleFilePath, path_convert) # What the fuck?
 
 
 def clear_kind_convert(param):
     return ClearKind(param)
 my_console.converter.add_converter(ClearKind, clear_kind_convert) # What the fuck?
 
-
-def dump(dtree):
-    print(pickle.dumps(dtree))
-    with open("tree.pkl", "wb") as file:
-        pickle.dump(dtree, file)
-
+async def aiodump(tree):
+    async with aiofiles.open('tree.pkl', 'wb') as f:
+        data = pickle.dumps(
+            tree, 
+            protocol = pickle.HIGHEST_PROTOCOL
+        )
+        await f.write(b'DPKL') # Identify
+        await f.write(data)
 
 @my_console.command()
 async def create(guild: discord.Guild):
     start_time = time.time()
-
-    guild_obj = record.Guild(guild)
-    await guild_obj.avisitor(guild)
-    await asyncio.to_thread(dump, dtree=guild_obj)
+    gen = gen_record.GuildGen()
+    gen = await GuildConverter(guild).convert(gen)
+    guild_obj = await gen.get_result()
+    await aiodump(guild_obj)
 
     end_time = time.time()
     print("Create complete!")
@@ -85,13 +95,60 @@ async def clear(guild: discord.Guild, clear_kind: ClearKind = ClearKind.ALL):
 
 
 @my_console.command()
-async def load(guild: discord.Guild, file_name: Path):
+async def load(guild: discord.Guild, file_name: PickleFilePath):
     with open(file_name, "rb") as file:
+        assert file.read(4) == b"DPKL"
         guild_from_file = pickle.load(file)
     guild_builder = builder.GuildBuilder(guild_from_file, bot)
     await guild_builder.build(guild)
     print("Load complete!")
 
+
+
+def alambda(fn):
+    async def wrapper(gen):
+        return await fn(gen)
+    return wrapper
+
+@my_console.command()
+async def test_gen(guild: discord.Guild):
+    print("start")
+    guild_record = await (
+        gen_record.GuildGen()
+        .with_name("guild_name")
+        .with_category(alambda(lambda gen: (
+            gen
+            .with_name("test_category")
+            .with_text_channel(alambda(lambda gen: (
+                gen
+                .with_name("test_chan")
+                .with_thread(alambda(lambda gen: (
+                    gen.
+                    with_name("Channel thread")
+                )))
+                .with_history(alambda(lambda gen: (
+                    gen
+                    .with_message(alambda(lambda gen: (
+                        gen
+                        .with_content("Hello world!")
+                        .with_thread(alambda(lambda gen: (
+                            gen
+                            .with_name("Message thread")
+                        )))
+                    )))
+                )))
+            )))
+            .with_voice_channel(alambda(lambda gen: (
+                gen
+                .with_name("test_voice_chan")
+            )))
+        )))
+    ).get_result()
+    print("tree initilized!")
+    print(guild_record)
+    guild_builder = builder.GuildBuilder(guild_record, bot)
+    await guild_builder.build(guild)
+    print("test tree building complete!")
 
 #Для проверки кусков кода, которые пугают Артёмов
 @bot.command()

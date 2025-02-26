@@ -8,8 +8,19 @@ import logging
 import traceback
 import shlex
 import threading
+from discord import __title__ as dpy_impl_name
+from discord import __version__ as dpy_version
+
 
 from dpyConsole.errors import CommandNotFound, ExtensionError
+from dpyConsole.completer import get_completes, CompleteInfo, ConsoleCompleter
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.shortcuts import CompleteStyle
+from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.formatted_text import ANSI, HTML
+from prompt_toolkit.styles import Style
 
 logger = logging.getLogger("dpyConsole")
 
@@ -92,6 +103,20 @@ class Console:
             self.__extensions[path] = module
             sys.modules.update(old_modules)
             raise
+    
+    def init_prompt_session(self):
+        info = CompleteInfo(self, self.client, self.client.loop)
+        self.prompt_session = PromptSession(
+            "-> ",
+            history=FileHistory("history.txt"),
+            completer=ConsoleCompleter(info),
+            mouse_support=True,
+            # complete_style=CompleteStyle.READLINE_LIKE,
+            cursor=CursorShape.BLINKING_BEAM,
+            bottom_toolbar= HTML(
+                f'(html) <b>{dpy_impl_name}</b> <style bg="ansired">{dpy_version}</style>'
+            )
+        )
 
     def listen(self):
         """
@@ -100,11 +125,16 @@ class Console:
         :return:
         """
         logger.info("Console is ready and is listening for commands\n")
+        self.init_prompt_session()
         while True:
             try:
-                console_in = shlex.split(self.input.readline())
+                line = self.prompt_session.prompt("-> ")
+                if line is None:
+                    break
+                
+                console_in = shlex.split(line) # INP
                 if len(console_in) == 0:
-                    return
+                    continue
                 try:
                     command = self.__commands__.get(console_in[0], None)
 
@@ -127,6 +157,7 @@ class Console:
                     traceback.print_exc()
             except Exception:
                 traceback.print_exc()
+        print("EXIT")
 
     def prepare(self, command, args):
         args_ = args.copy()
@@ -219,7 +250,8 @@ class Command:
         :return:
         """
         if loop:
-            asyncio.run_coroutine_threadsafe(self.__callback__(*args), loop=loop)
+            task = asyncio.run_coroutine_threadsafe(self.__callback__(*args), loop=loop)
+            while not task.done(): pass # wait for task
         else:
             self.__callback__(*args)
 
